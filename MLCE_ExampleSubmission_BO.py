@@ -4,6 +4,8 @@ from datetime import datetime
 import random
 import matplotlib.pyplot as plt
 
+from utils import plot_cum_sum
+
 def objective_func(X: list): 
     return(np.array(virtual_lab.conduct_experiment(X)))
 
@@ -53,3 +55,5 @@ celltype = ['celltype_1','celltype_2','celltype_3']
 X_searchspace     = [[a,b,c,d,e,f] for a in temp for b in pH for c in f1 for d in f2 for e in f3 for f in celltype]
 
 BO_m = BO(X_initial, X_searchspace, 15, 5, objective_func)
+plot = plot_cum_sum(BO_m)
+plt.show()
