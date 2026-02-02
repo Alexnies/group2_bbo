@@ -86,6 +86,11 @@ class GP:
         
         return K_cont
     
+    def negative_loglikelihood(self, X, y):
+        log_det_K = 2 * np.sum(np.log(np.diag(self.L)))
+        nll = np.dot(y.T, self.alpha) + log_det_K
+        return nll
+    
     def fit(self, X, y):
         X = np.asarray(X, dtype=float)
         y = np.asarray(y, dtype=float).flatten()
@@ -108,7 +113,8 @@ class GP:
         K = self._compute_kernel(self.X_train, self.X_train, 
                                  self.X_train_cat, self.X_train_cat)
         K[np.diag_indices_from(K)] += self.noise_level
-        
+        K = (K + K.T) * 0.5
+
         try:
             self.L = cholesky(K, lower=True)
         except np.linalg.LinAlgError:
@@ -144,3 +150,6 @@ class GP:
         return mean, std
     
 
+
+    
+    
