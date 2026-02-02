@@ -6,16 +6,33 @@ import matplotlib.pyplot as plt
 from scipy.spatial.distance import cdist
 from scipy.linalg import cholesky, solve_triangular
 
+def objective_func(X: list): 
+    return(np.array(virtual_lab.conduct_experiment(X)))
 
-# Custom GP with multiple kernel options
+ENCODE_KEY = {'celltype_1': 0, 'celltype_2': 1, 'celltype_3': 2}
+DECODE_KEY = {0: 'celltype_1', 1: 'celltype_2', 2: 'celltype_3'}
+
+def encode(X):
+    encoded_celltype = []
+    for row in X:
+        temp, pH, f1, f2, f3, cell_type = row
+        celltype_id = ENCODE_KEY.get(str(cell_type), 0)
+        encoded_celltype.append([float(temp), float(pH), float(f1), float(f2), float(f3), float(celltype_id)])
+    return np.array(encoded_celltype, dtype=float)
+
+
 class GP:    
-    def __init__(self, kernel='matern52', length_scale=1.0, signal_variance=1.0, noise_level=1e-5):
+    def __init__(self, kernel='matern52', length_scale=1.0, signal_variance=1.0, 
+                 noise_level=1e-5, theta=0.25, use_mixed_kernel=False):
         self.kernel = kernel.lower()
         self.length_scale = length_scale
         self.signal_variance = signal_variance
         self.noise_level = noise_level
+        self.theta = theta
+        self.use_mixed_kernel = use_mixed_kernel
         
         self.X_train = None
+        self.X_train_cat = None
         self.y_train = None
         self.L = None  # Cholesky factor
         self.alpha = None  # K^-1 @ y
@@ -42,7 +59,7 @@ class GP:
         scaled_dist = np.sqrt(5.0) * dist / self.length_scale
         return (1.0 + scaled_dist + (scaled_dist ** 2) / 3.0) * np.exp(-scaled_dist)
     
-    def _compute_kernel(self, X1, X2):
+    def _continuous_kernel(self, X1, X2):
         if self.kernel == 'rbf':
             K = self._rbf_kernel(X1, X2)
         elif self.kernel == 'matern32':
@@ -54,19 +71,42 @@ class GP:
         
         return self.signal_variance * K
     
+    def _categorical_kernel(self, cat1, cat2):
+        cat1 = np.asarray(cat1).reshape(-1, 1)
+        cat2 = np.asarray(cat2).reshape(-1, 1)
+        same_category = (cat1 == cat2.T).astype(float)
+        return same_category + self.theta * (1 - same_category)
+    
+    def _compute_kernel(self, X1, X2, cat1=None, cat2=None):
+        K_cont = self._continuous_kernel(X1, X2)
+        
+        if self.use_mixed_kernel and cat1 is not None and cat2 is not None:
+            K_cat = self._categorical_kernel(cat1, cat2)
+            return K_cont * K_cat
+        
+        return K_cont
+    
     def fit(self, X, y):
         X = np.asarray(X, dtype=float)
         y = np.asarray(y, dtype=float).flatten()
         
-        self._X_min = np.min(X, axis=0)
-        self._X_max = np.max(X, axis=0)
-        self.X_train = self._normalise_X(X)
+        if self.use_mixed_kernel:
+            X_cont = X[:, :5]
+            self.X_train_cat = X[:, 5].astype(int)
+        else:
+            X_cont = X
+            self.X_train_cat = None
+        
+        self._X_min = np.min(X_cont, axis=0)
+        self._X_max = np.max(X_cont, axis=0)
+        self.X_train = self._normalise_X(X_cont)
         
         self.y_mean = np.mean(y)
         self.y_std = np.std(y) + 1e-10
         self.y_train = (y - self.y_mean) / self.y_std
         
-        K = self._compute_kernel(self.X_train, self.X_train)
+        K = self._compute_kernel(self.X_train, self.X_train, 
+                                 self.X_train_cat, self.X_train_cat)
         K[np.diag_indices_from(K)] += self.noise_level
         
         try:
@@ -80,16 +120,27 @@ class GP:
     
     def predict(self, X_test):
         X_test = np.asarray(X_test, dtype=float)
-        X_test_norm = self._normalise_X(X_test)
         
-        K_ = self._compute_kernel(self.X_train, X_test_norm)
+        if self.use_mixed_kernel:
+            X_test_cont = X_test[:, :5]
+            X_test_cat = X_test[:, 5].astype(int)
+        else:
+            X_test_cont = X_test
+            X_test_cat = None
+        
+        X_test_norm = self._normalise_X(X_test_cont)
+        
+        K_ = self._compute_kernel(self.X_train, X_test_norm,
+                                  self.X_train_cat, X_test_cat)
         
         y_pred_norm = K_.T @ self.alpha
         mean = y_pred_norm * self.y_std + self.y_mean
         
         v = solve_triangular(self.L, K_, lower=True)
-        var_norm = 1.0 - np.sum(v ** 2, axis=0)
+        var_norm = self.signal_variance - np.sum(v ** 2, axis=0)
         var_norm = np.maximum(var_norm, 0)
         std = np.sqrt(var_norm) * self.y_std
         
         return mean, std
+    
+
